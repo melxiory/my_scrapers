@@ -1,12 +1,10 @@
 import time
 import os
 import shutil
-from pprint import pprint
-import urllib.request
+import asyncio
+import aiohttp
+import aiofiles
 from selenium import webdriver
-from selenium.webdriver import ActionChains
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.webdriver.support.wait import WebDriverWait
@@ -28,27 +26,22 @@ def scraping(driver, wait):
     try:
       image_url = image_html_node.get_attribute("href")
       image_urls.append(image_url)
-    except StaleElementReferenceException as e:
+    except StaleElementReferenceException:
       continue
   return image_urls
 
-def download_pictures(image_urls):
-  image_name_counter = 1
-  # download each image and add it
-  # to the "/images" local folder
-  shutil.rmtree('./images', ignore_errors=True)
-  os.mkdir('images')
-  for image_url in image_urls:
-    print(f"downloading image no.{image_name_counter} ...")
-    file_name = f"./images/{image_name_counter}.jpg"
-    # download the image
-    urllib.request.urlretrieve(image_url, file_name)
-    print(f"images downloaded successfully to \"{file_name}\"\n")
-    image_name_counter += 1
+async def download_pictures(image_url, number, session, semaphore):
+  async with semaphore:
+    async with session.get(image_url) as resp:
+      if resp.status == 200:
+        async with aiofiles.open(f"./images/{number}.png", "wb") as f:
+          print(f"downloading image no.{number} ...")
+          await f.write(await resp.read())
+          print(f"images downloaded successfully to \"./images/{number}.png\"\n")
 
 
-def main():
-  # initialize a Chrome WerbDriver instance
+async def main():
+  # initialize a Chrome WebDriver instance
   driver = webdriver.Chrome()
   # to avoid issues with responsive content
   driver.maximize_window()
@@ -58,11 +51,16 @@ def main():
   wait = WebDriverWait(driver, 10)
   driver.get(url)
   image_urls = scraping(driver, wait)
-  download_pictures(image_urls)
+  shutil.rmtree('./images', ignore_errors=True)
+  os.mkdir('images')
+  semaphore = asyncio.Semaphore(5)
+  async with aiohttp.ClientSession() as session:
+    downloaders = [asyncio.create_task(download_pictures(image_url, number, session, semaphore)) for number, image_url in enumerate(image_urls)]
+    await asyncio.gather(*downloaders)
   driver.quit()
 
 
 if __name__ == '__main__':
   curr_time = time.time()
-  main()
+  asyncio.run(main(), debug=True)
   print(f'Total time: {round(time.time() - curr_time, 2)}s')
